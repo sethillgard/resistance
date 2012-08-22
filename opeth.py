@@ -38,7 +38,7 @@ class Opeth(Bot):
     their_guess = dict()
 
     # List of players that I am sure are spies.
-    spies_for_sure = []
+    spies_for_sure = set()
 
     def onGameRevealed(self, players, spies):
         """This function will be called to list all the players, and if you're
@@ -48,8 +48,8 @@ class Opeth(Bot):
         """
         self.spy_spies = spies
 
-        self.my_guess = new dict(zip(players, [0] * 5))
-        self.their_guess = new dict(zip(players, [0] * 5))
+        self.my_guess = dict(zip(players, [0] * 5))
+        self.their_guess = dict(zip(players, [0] * 5))
 
     def onMissionAttempt(self, mission, tries, leader):
         """Callback function when a new turn begins, before the
@@ -66,13 +66,20 @@ class Opeth(Bot):
         @param count    The number of players you must now select.
         @return list    The players selected for the upcoming mission.
         """
-        if not self.spy_spies:
-            return random.sample(self.game.players, count)
+
+        # It makes a lot of sense to be part of the team so we will always propose ourselves.
+
+        if not self.spy:
+            # I am not a spy. Select myself and the people I trust the most.
+            return self.getPlayersITrust(count - 1) + [self]
         else:
-            # Purposefully go out of our way to pick the other spy so that we
-            # can trick him with deceptive sabotaging!
-            self.log.info("Picking the other spy to trick them!")
-            return list(self.spy_spies) + random.sample(set(self.game.players) - set(self.spy_spies), count-2)
+            # I am a spy. Select myself and the people I think they trust the least (that will be confusing).
+            team = self.getPlayersTheyDontTrust(count)
+            # If I am not on that list, replace the last element
+            if self not in team:
+                team[count - 1] = self  
+
+            return team
 
     def onTeamSelected(self, leader, team):
         """Called immediately after the team is selected to go on a mission,
@@ -84,7 +91,7 @@ class Opeth(Bot):
         # Because we are bots and there is no conversation involved, there is no
         # point in not selecting yourself as part of the team. If they didn't
         # do it, that is suspicious.
-        if(leader not in team):
+        if leader not in team:
             self.my_guess[leader] -= 5
             self.their_guess[leader] -= 5
 
@@ -95,7 +102,38 @@ class Opeth(Bot):
         @param team      List of players with index and name.
         @return bool     Answer Yes/No.
         """
+
+        # Approve my own team.
+        if self == self.game.leader:
+            return True
+
+        # Both types of factions have constant behavior on the last try.
+        if self.game.tries == 5:
+            return not self.spy
+        # Spies select any mission with one or more spies on it.
+        if self.spy:
+            return len([p for p in self.game.team if p in self.spy_spies]) > 0
+        else:
+            # I am resistance. Vote against teams that have at least one of 2 most untrustested players
+            worst = self.getPlayersIDontTrust(2)
+            for p in worst:
+                if p in team:
+                    return False
+        
+        #If I'm not on the team, and it's a team of 3...
+        if len(self.game.team) == 3 and not self in self.game.team:
+            return False    
+
         return True
+
+        # if not self.spy:
+        #     # Not a spy!
+        #     my_team = self.getPlayersITrust(len(team))
+        #     #TODO: see how simmilar my_team is to team and decide if we should approve
+
+
+
+        # return True
 
     def onVoteComplete(self, votes):
         """Callback once the whole team has voted.
@@ -108,6 +146,9 @@ class Opeth(Bot):
         function is only called if you're a spy, otherwise you have no choice.
         @return bool        Yes to shoot down a mission.
         """
+
+        # TODO: implement me!   
+        return True
         spies = [s for s in self.game.team if s in self.spy_spies]
         if len(spies) > 1:
             # Intermediate to advanced bots assume that sabotage is "controlled"
@@ -137,35 +178,31 @@ class Opeth(Bot):
         """
 
         # Can we know for sure if the whole team are spies?
-        if(len(self.game.team) == sabotaged):
+        if len(self.game.team) == sabotaged:
             for spy in self.game.team:
                 self.my_guess[spy] -= 100
                 self.their_guess[spy] -= 100
-                self.spies_for_sure.append(spy)
+                self.spies_for_sure.add(spy)
 
         # Can we know for sure if the rest of the team is a spy?
         # 3 conditions: I am not a spy, I am in the team,
-        # the number of sabotaged votes is equal to the
+        # and the number of sabotaged votes is equal to the
         # team size minus one (my vote)
-        if(self.spy_spies is None and self in self.game.team and sabotaged == len(self.game.team) - 1):
+        if not self.spy and self in self.game.team and sabotaged == len(self.game.team) - 1:
             for spy in self.game.team:
-                if(self is not spy)
-                self.my_guess[spy] -= 100
-                self.spies_for_sure.append(spy)
+                if self is not spy:
+                    self.my_guess[spy] -= 100
+                    self.spies_for_sure.add(spy)
 
-        # If this mission failed, that team gets penalized (a bit),
+        # If this mission failed, that team gets penalized (according to the number of times the mission was sabotaged),
         # otherwise we gain confidence in them.
-        # I wish I knew how many
         for player in self.game.team:
-            if(sabotaged):
-                self.my_guess[player] -= 1
-                self.their_guess[player] -= 1
+            if sabotaged:
+                self.my_guess[player] -= sabotaged
+                self.their_guess[player] -= sabotaged
             else:
                 self.my_guess[player] += 1
                 self.their_guess[player] += 1
-
-
-        pass
 
     def onGameComplete(self, win, spies):
         """Callback once the game is complete, and everything is revealed.
@@ -173,3 +210,24 @@ class Opeth(Bot):
         @param spies        List of only the spies in the game.
         """
         pass
+
+    def getPlayersITrust(self, number_players):
+        """Returns a sorted list of the number_players more trustworthy players.
+        @param number_players How many players do you want?
+        """
+        sorted_list = sorted(self.game.players, key=lambda player: self.my_guess[player], reverse=True)
+        sorted_list.remove(self)
+        return sorted_list[:number_players]
+
+    def getPlayersIDontTrust(self, number_players):
+        sorted_list = sorted(self.game.players, key=lambda player: self.my_guess[player], reverse=False)
+        sorted_list.remove(self)
+        return sorted_list[:number_players]
+
+    def getPlayersTheyTrust(self, number_players):
+        sorted_list = sorted(self.game.players, key=lambda player: self.their_guess[player], reverse=True)
+        return sorted_list[:number_players]
+
+    def getPlayersTheyDontTrust(self, number_players):
+        sorted_list = sorted(self.game.players, key=lambda player: self.their_guess[player], reverse=False)
+        return sorted_list[:number_players]
