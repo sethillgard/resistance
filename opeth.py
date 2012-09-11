@@ -66,19 +66,26 @@ class Opeth(Bot):
         @param count    The number of players you must now select.
         @return list    The players selected for the upcoming mission.
         """
+        me = [p for p in players if p.index == self.index]
+
+        # As a spy, pick myself and others who are not spies.
+        # if self.spy:
+        #    others = [p for p in players if p not in self.spy_spies]
+        #    return me + random.sample(others, count-1)
 
         # It makes a lot of sense to be part of the team so we will always propose ourselves.
 
         if not self.spy:
             # I am not a spy. Select myself and the people I trust the most.
-            team = self.getPlayersITrust(count - 1) + [self]
+            team = self.getPlayersITrust(count)
         else:
             # I am a spy. Select myself and the people I think they trust the most.
             team = self.getPlayersTheyTrust(count)
 
         # If I am not on that list, replace the last element
-        if self not in team:
-            team[count - 1] = self  
+        if me[0] not in team:
+            team.pop()
+            team = team + me
 
         return team
 
@@ -108,7 +115,7 @@ class Opeth(Bot):
         self.log.debug(team)
 
         # Approve my own team.
-        if self == self.game.leader:
+        if self.index == self.game.leader.index:
             self.log.debug("Yup. I am the leader.")
             return True
 
@@ -120,7 +127,7 @@ class Opeth(Bot):
         # Spies select any mission with one or more spies on it.
         if self.spy:
             self.log.debug("Yup. I am a spy and there is at least one spy on the team.")
-            return len([p for p in self.game.team if p in self.spy_spies]) > 0
+            return len([p for p in team if p in self.spy_spies]) > 0
     
         # I am resistance. Vote against teams that have at least one of 2 most untrustested players
         worst = self.getPlayersITrust(2, True)
@@ -128,13 +135,13 @@ class Opeth(Bot):
             if player in team and self.my_guess[player] < 0:
                 self.log.debug("Nope. I don't trust these guys:")
                 self.log.debug(worst)
-                self.log.debug(self.game.team)
+                self.log.debug(team)
                 return False
     
         #If I'm not on the team, and it's a team of 3...
-        if len(self.game.team) == 3 and not self in self.game.team:
+        if len(team) == 3 and not self in team:
             self.log.debug("Nope. It's a a team of 3 and I am not in it:")
-            self.log.debug(self.game.team)
+            self.log.debug(team)
             return False    
 
         return True
@@ -143,7 +150,7 @@ class Opeth(Bot):
         """Callback once the whole team has voted.
         @param votes        Boolean votes for each player (ordered).
         """
-        if votes >= 3:
+        if votes > 3:
             self.log.debug("* Team approved!")
         else:
             self.log.debug("* Team rejected!")
@@ -161,24 +168,42 @@ class Opeth(Bot):
 
         # Sabotage to win (spies won 2 times already)
         if self.game.losses == 2:
+            self.log.debug("Sabotaging because spies have won 2 missions")
             return True
 
         # Sabotage to not loose (resistance won 2 times already). 
         # Only do it if there is at least a non spy on the team.
         if self.game.wins == 2 and len(spies) < len(self.game.team):
+            self.log.debug("Sabotaging because resistance has won 2 missions")
             return True
 
-
-        if len(spies) > 1:
-            # Intermediate to advanced bots assume that sabotage is "controlled"
-            # by the mission leader, so we go against this practice here.
-            if self == self.game.leader:
+        # If I am the only spy
+        if len(spies) == 1:
+            return True
+            if (len(self.game.team) == 3):
+                self.log.debug("Sabotaging because I am the only spy on a team of 3.")
                 return True
 
-            # This is the opposite of the same practice, sabotage if the other
-            # bot is expecting "control" the sabotage.
+            if (len(self.game.team) == 2):
+                # We will confuse them only if they haven't won anything.
+                self.log.debug("Sabotaging: " + str(self.game.wins != 0) + " because I am the only spy and the number of wins is " + str(self.game.wins))
+                return self.game.wins != 0
+            return True
+
+        if len(spies) > 1:
+            if self.index == self.game.leader.index:
+                self.log.debug("Sabotaging. There is more than one spy in the team but I am the leader")
+                return True
+
             if self.game.leader in spies:
+                self.log.debug("Not sabotaging. There is more than one spy but I am not the leader.")
                 return False
+
+            # More than one spy and non of us is the leader. 
+            # Make this decision based on the number of wins.
+            self.log.debug("Sabotaging: " + str(self.game.wins > 1) + " because I am not the only spy and the number of wins is " + str(self.game.wins))
+            return self.game.wins > 1
+
         return True
 
     def onMissionComplete(self, sabotaged):
